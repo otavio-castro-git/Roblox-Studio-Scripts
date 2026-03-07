@@ -1,0 +1,997 @@
+--=======================
+-- SCRIPT MOVIMENTAÇÃO AVANÇADA
+--=======================
+
+-- Váriaveis
+local DOUBLE_TAP_TIME = 0.30     -- tempo máximo entre toques (segundos)
+local TRANSITION_TIME = 4.5      -- tempo para chegar à velocidade máxima (segundos)
+local DEFAULT_SPEED = 16         -- velocidade normal
+local MIN_RUN_SPEED = 24         -- velocidade inicial da corrida
+local MAX_SPEED = 42             -- velocidade máxima ao correr
+
+local START_ANIM_SPEED = 0.9     -- velocidade inicial da animação
+local MAX_ANIM_SPEED = 1.5       -- velocidade máxima da animação
+
+local DEFAULT_FOV = 70           -- FOV padrão
+local MAX_FOV = 110              -- FOV máximo durante corrida
+
+local DEFAULT_OFFSET = Vector3.new(0, 0, 0)
+local RUN_OFFSET = Vector3.new(0, 0, 1.5)
+
+local DEFAULT_JUMP_HEIGHT = 7    -- altura de pulo normal
+local MIN_RUN_JUMP = 8           -- altura de pulo ao iniciar a corrida
+local MAX_RUN_JUMP = 12       -- altura do pulo ao atingir a velocidade máxima
+
+
+-- Varaáveis internas
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+
+local player = Players.LocalPlayer
+local character = script.Parent
+local humanoid = character:WaitForChild("Humanoid")
+local hrp = character:WaitForChild("HumanoidRootPart")
+local camera = workspace.CurrentCamera
+
+local lastWTime = 0
+local ramping = false
+local currentTrack = nil
+local runningConnection = nil
+local animationStarted = false
+local currentJumpHeight = DEFAULT_JUMP_HEIGHT
+
+local fallTrack = nil
+
+
+-- Buscar animações
+local function findAnimationByName(name)
+	local anim = script:FindFirstChild(name)
+	if anim and anim:IsA("Animation") then
+		return anim
+	end
+	return nil
+end
+
+local runAnim = findAnimationByName("RunAnim")
+local jumpAnim = findAnimationByName("JumpAnim")
+local fallAnim = findAnimationByName("FallAnim")
+
+-- Gerenciar animações
+local function playRunAnimation()
+	if not runAnim then return nil end
+	local track
+	pcall(function()
+		track = humanoid:LoadAnimation(runAnim)
+	end)
+	if track then
+		track:Play()
+		pcall(function() track:AdjustSpeed(START_ANIM_SPEED) end)
+	end
+	return track
+end
+
+local function playJumpAnimation()
+	if not jumpAnim then return end
+	local jumpTrack
+	pcall(function()
+		jumpTrack = humanoid:LoadAnimation(jumpAnim)
+	end)
+	if jumpTrack then
+		jumpTrack:Play()
+	end
+end
+
+local function playFallAnimation()
+	if not fallAnim then return end
+	if fallTrack and fallTrack.IsPlaying then return end
+
+	pcall(function()
+		fallTrack = humanoid:LoadAnimation(fallAnim)
+	end)
+	if fallTrack then
+		fallTrack:Play()
+	end
+end
+
+local function stopFallAnimation()
+	if fallTrack and fallTrack.IsPlaying then
+		pcall(function()
+			fallTrack:Stop()
+		end)
+	end
+end
+
+
+
+-- Resetar ao parar
+local function resetAll()
+	ramping = false
+	animationStarted = false
+	if runningConnection then
+		runningConnection:Disconnect()
+		runningConnection = nil
+	end
+
+	stopFallAnimation()
+
+	humanoid.WalkSpeed = DEFAULT_SPEED
+	humanoid.JumpHeight = DEFAULT_JUMP_HEIGHT
+
+	TweenService:Create(humanoid, TweenInfo.new(0.5, Enum.EasingStyle.Cubic), {CameraOffset = DEFAULT_OFFSET}):Play()
+	TweenService:Create(camera, TweenInfo.new(0.5, Enum.EasingStyle.Cubic), {FieldOfView = DEFAULT_FOV}):Play()
+
+	if currentTrack then
+		pcall(function() currentTrack:Stop() end)
+		currentTrack = nil
+	end
+end
+
+
+-- Correr gradualmente
+local function rampSpeedAndAnim()
+	if ramping then return end
+	ramping = true
+
+	local startSpeed = humanoid.WalkSpeed
+	local startFOV = camera.FieldOfView
+	local startOffset = humanoid.CameraOffset
+	local elapsed = 0
+	local lastTick = tick()
+	animationStarted = false
+
+	if runningConnection then
+		runningConnection:Disconnect()
+	end
+
+	runningConnection = humanoid.Running:Connect(function(speed)
+		if speed < 1 then
+			resetAll()
+		end
+	end)
+
+	while ramping and elapsed < TRANSITION_TIME do
+		local now = tick()
+		local dt = now - lastTick
+		lastTick = now
+		elapsed += dt
+
+		local alpha = math.clamp(elapsed / TRANSITION_TIME, 0, 1)
+
+		
+		humanoid.WalkSpeed = startSpeed + (MAX_SPEED - startSpeed) * alpha
+
+		
+		if humanoid.WalkSpeed >= MIN_RUN_SPEED and not animationStarted then
+			animationStarted = true
+			currentTrack = playRunAnimation()
+		end
+
+		
+		if animationStarted and currentTrack then
+			local animSpeed = START_ANIM_SPEED + ((MAX_ANIM_SPEED - START_ANIM_SPEED) * alpha)
+			pcall(function() currentTrack:AdjustSpeed(animSpeed) end)
+		end
+
+		
+		camera.FieldOfView = startFOV + (MAX_FOV - startFOV) * alpha
+		humanoid.CameraOffset = startOffset:Lerp(RUN_OFFSET, alpha)
+
+		
+		if humanoid.WalkSpeed >= MIN_RUN_SPEED then
+			local jumpAlpha = math.clamp((humanoid.WalkSpeed - MIN_RUN_SPEED) / (MAX_SPEED - MIN_RUN_SPEED), 0, 1)
+			currentJumpHeight = MIN_RUN_JUMP + (MAX_RUN_JUMP - MIN_RUN_JUMP) * jumpAlpha
+			humanoid.JumpHeight = currentJumpHeight
+		end
+
+		RunService.Heartbeat:Wait()
+	end
+
+	if ramping then
+		humanoid.WalkSpeed = MAX_SPEED
+		camera.FieldOfView = MAX_FOV
+		humanoid.CameraOffset = RUN_OFFSET
+		humanoid.JumpHeight = MAX_RUN_JUMP
+		if currentTrack then
+			pcall(function() currentTrack:AdjustSpeed(MAX_ANIM_SPEED) end)
+		end
+	end
+end
+
+
+--Detectar estados do Humanoid
+humanoid.StateChanged:Connect(function(_, new)
+	if new == Enum.HumanoidStateType.Jumping then
+		
+		stopFallAnimation()
+		if humanoid.WalkSpeed >= MIN_RUN_SPEED then
+			playJumpAnimation()
+		end
+	elseif new == Enum.HumanoidStateType.Freefall then
+		
+		playFallAnimation()
+	else
+		
+		stopFallAnimation()
+	end
+end)
+
+--=======================
+-- DOUBLE TAP 'W' RUN
+--=======================
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then return end
+	if input.KeyCode == Enum.KeyCode.W then
+		local now = tick()
+		if now - lastWTime <= DOUBLE_TAP_TIME then
+			task.spawn(rampSpeedAndAnim)
+		end
+		lastWTime = now
+	end
+end)
+
+
+--=======================
+-- AUTO-STEP / SUBIDA SUAVE 
+--=======================
+
+local STEP_SMALL_HEIGHT = 3.5     -- altura pequena (só o raycast do meio)
+local STEP_BIG_HEIGHT = 6.5       -- altura maior (raycast do meio + cabeça)
+local STEP_TIME = 0.07            -- tempo de subida
+local STEP_COOLDOWN = 0.3         -- tempo mínimo entre auto-steps
+
+local lastStep = 0
+
+
+
+--Pegar a direção frontal do personagem
+local function getForwardDirection()
+	local hrp = character:FindFirstChild("HumanoidRootPart")
+	if not hrp then return Vector3.new(0, 0, -1) end
+	local moveDir = humanoid.MoveDirection
+	if moveDir.Magnitude < 0.1 then
+		moveDir = hrp.CFrame.LookVector
+	end
+	return moveDir.Unit
+end
+
+
+--Função para executar o auto-step
+local function autoStep()
+	
+	if humanoid.WalkSpeed <= MIN_RUN_SPEED then return end
+	if humanoid.FloorMaterial == Enum.Material.Air then return end 
+	if tick() - lastStep < STEP_COOLDOWN then return end
+
+	local hrp = character:FindFirstChild("HumanoidRootPart")
+	if not hrp then return end
+
+	local dir = getForwardDirection() * 2.5
+	local pos = hrp.Position
+
+	local originFoot = pos + Vector3.new(0, -2, 0)
+	local originMid = pos
+	local originHead = pos + Vector3.new(0, 2, 0)
+	local originTop = pos + Vector3.new(0, 4, 0) 
+
+	local params = RaycastParams.new()
+	params.FilterDescendantsInstances = {character}
+	params.FilterType = Enum.RaycastFilterType.Exclude
+
+	local footRay = workspace:Raycast(originFoot, dir, params)
+	local midRay = workspace:Raycast(originMid, dir, params)
+	local headRay = workspace:Raycast(originHead, dir, params)
+	local topRay = workspace:Raycast(originTop, dir, params)
+
+
+	if topRay then return end
+
+
+	if not midRay then return end
+
+	local targetHeight = 0
+	if midRay and not headRay then
+		targetHeight = STEP_SMALL_HEIGHT
+	elseif midRay and headRay then
+		targetHeight = STEP_BIG_HEIGHT
+	end
+
+	if targetHeight > 0 then
+		lastStep = tick()
+		local hitPart = midRay.Instance
+		if hitPart and hitPart.CanCollide then
+			task.delay(STEP_TIME + 0.25, function()
+				if hitPart then
+					hitPart.CanCollide = true
+				end
+			end)
+		end
+
+
+		local startPos = hrp.CFrame.Position
+		local endPos = startPos + Vector3.new(0, targetHeight, 0)
+		local elapsed = 0
+		local last = tick()
+		
+		local animParkour = humanoid:FindFirstChildOfClass("Animator"):LoadAnimation(script:WaitForChild("Parkour"..tostring(math.random(1,3))))
+		animParkour:Play()
+		while elapsed < STEP_TIME do
+			local now = tick()
+			local dt = now - last
+			last = now
+			elapsed += dt
+			local alpha = math.clamp(elapsed / STEP_TIME, 0, 1)
+			local newPos = startPos:Lerp(endPos, alpha)
+			hrp.CFrame = CFrame.new(newPos, newPos + hrp.CFrame.LookVector)
+			RunService.Heartbeat:Wait()
+		end
+	end
+end
+
+-- Checagem constante enquanto corre
+RunService.Heartbeat:Connect(function()
+	if humanoid.WalkSpeed > MIN_RUN_SPEED and humanoid.MoveDirection.Magnitude > 0.1 then
+		autoStep()
+	end
+end)
+
+
+--==============================
+-- WALL RUN SYSTEM 
+--==============================
+
+-- Variáveis de controle
+local wallRunActive = false
+local wallSide = nil
+local wallBodyVel, wallBodyGyro
+
+-- Distância do Raycast lateral
+local WALL_RAY_DISTANCE = 2
+
+-- Animações
+local animWallL = humanoid:FindFirstChildOfClass("Animator"):LoadAnimation(script:WaitForChild("WallRunL"))
+local animWallR = humanoid:FindFirstChildOfClass("Animator"):LoadAnimation(script:WaitForChild("WallRunR"))
+local animFlip = humanoid:FindFirstChildOfClass("Animator"):LoadAnimation(script:WaitForChild("Flip"))
+
+
+-- Função que faz o raycast lateral
+local function getWall(side)
+	local params = RaycastParams.new()
+	params.FilterDescendantsInstances = {character}
+	params.FilterType = Enum.RaycastFilterType.Exclude
+
+	local dir = (side == "Left") and -hrp.CFrame.RightVector * WALL_RAY_DISTANCE or hrp.CFrame.RightVector * WALL_RAY_DISTANCE
+	local origin = hrp.Position
+
+	return workspace:Raycast(origin, dir, params)
+end
+
+
+-- Iniciar o Wall Run
+local function startWallRun(side)
+	if wallRunActive then return end
+	if humanoid.WalkSpeed < MIN_RUN_SPEED then return end
+	wallRunActive = true
+	wallSide = side
+
+	
+	if side == "Left" then
+		animWallR:Stop()
+		animWallL:Play()
+	else
+		animWallL:Stop()
+		animWallR:Play()
+	end
+
+	
+	wallBodyVel = Instance.new("BodyVelocity")
+	wallBodyVel.MaxForce = Vector3.new(1e5, 1e5, 1e5)
+	wallBodyVel.Velocity = hrp.CFrame.LookVector * humanoid.WalkSpeed + Vector3.new(0, 1, 0)
+	wallBodyVel.Parent = hrp
+
+	wallBodyGyro = Instance.new("BodyGyro")
+	wallBodyGyro.MaxTorque = Vector3.new(1e5, 1e5, 1e5)
+	wallBodyGyro.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + hrp.CFrame.LookVector, Vector3.new(0, 1, 0))
+	wallBodyGyro.Parent = hrp
+end
+
+-- Parar o Wall Run
+local function stopWallRun()
+	if not wallRunActive then return end
+	wallRunActive = false
+
+	animWallL:Stop()
+	animWallR:Stop()
+
+	if wallBodyVel then wallBodyVel:Destroy() wallBodyVel = nil end
+	if wallBodyGyro then wallBodyGyro:Destroy() wallBodyGyro = nil end
+
+	
+	if humanoid.MoveDirection.Magnitude > 0 then
+		humanoid:Move(humanoid.MoveDirection, true)
+	end
+end
+
+-- Checagem contínua: detectação de parede, inputs e inpulsos
+RunService.RenderStepped:Connect(function()
+	if not wallRunActive then return end
+
+	
+	if not UserInputService:IsKeyDown(Enum.KeyCode.W) then
+		stopWallRun()
+		return
+	end
+
+	
+	if wallSide == "Left" and not UserInputService:IsKeyDown(Enum.KeyCode.A) then
+		stopWallRun()
+		return
+	elseif wallSide == "Right" and not UserInputService:IsKeyDown(Enum.KeyCode.D) then
+		stopWallRun()
+		return
+	end
+
+	
+	local wallHit = getWall(wallSide)
+	if not wallHit then
+		stopWallRun()
+		return
+	end
+
+	
+	wallBodyVel.Velocity = hrp.CFrame.LookVector * humanoid.WalkSpeed + Vector3.new(0, 1, 0)
+end)
+
+
+-- Inicio do movimento com inputs
+UserInputService.InputBegan:Connect(function(input, gp)
+	if gp then return end
+	if humanoid.WalkSpeed > MIN_RUN_SPEED and UserInputService:IsKeyDown(Enum.KeyCode.W) then
+		if input.KeyCode == Enum.KeyCode.A then
+			local wallHit = getWall("Left")
+			if wallHit then
+				startWallRun("Left")
+			end
+		elseif input.KeyCode == Enum.KeyCode.D then
+			local wallHit = getWall("Right")
+			if wallHit then
+				startWallRun("Right")
+			end
+		end
+	end
+
+	
+	if wallRunActive then
+		if input.KeyCode == Enum.KeyCode.Space or input.KeyCode == Enum.KeyCode.Q then
+			stopWallRun()
+			animFlip:Play()
+			humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+		end
+	end
+end)
+
+
+-- Final do movimento com inputs
+UserInputService.InputEnded:Connect(function(input, gp)
+	if gp then return end
+	if wallRunActive then
+		if (wallSide == "Left" and input.KeyCode == Enum.KeyCode.A)
+			or (wallSide == "Right" and input.KeyCode == Enum.KeyCode.D)
+			or input.KeyCode == Enum.KeyCode.W then
+			stopWallRun()
+		end
+	end
+end)
+
+
+
+--==============================
+-- CLIMBING SYSTEM 
+--==============================
+
+-- Variáveis de controle
+local climbing = false
+local climbVel
+local climbGyro
+local climbAnimTrack
+local climbIdleTrack
+
+-- Configuração
+local CLIMB_SPEED = 20 -- velocidade da escalada 
+local CLIMB_RAY_DISTANCE = 2.5 -- distância dos raycasts frontais
+local CLIMB_RAY_HEIGHT = 0.1 -- distância (vertical) entre raycasts
+
+-- Referências
+local player = game.Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoid = character:WaitForChild("Humanoid")
+local hrp = character:WaitForChild("HumanoidRootPart")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+
+-- Animações
+local climbAnim = script:WaitForChild("ClimbAnim")
+local climbAnimIdle = script:WaitForChild("ClimbAnimIdle")
+
+-- Função que faz raycasts frontais (cima, cabeça, meio)
+local function getClimbRays()
+	local params = RaycastParams.new()
+	params.FilterDescendantsInstances = {character}
+	params.FilterType = Enum.RaycastFilterType.Exclude
+
+	local forward = hrp.CFrame.LookVector
+	local originHead = hrp.Position + Vector3.new(0, humanoid.HipHeight + 1.5, 0)
+	local originMid = hrp.Position
+	local originTop = originHead + Vector3.new(0, CLIMB_RAY_HEIGHT, 0)
+
+	local rayHead = workspace:Raycast(originHead, forward * CLIMB_RAY_DISTANCE, params)
+	local rayMid = workspace:Raycast(originMid, forward * CLIMB_RAY_DISTANCE, params)
+	local rayTop = workspace:Raycast(originTop, forward * CLIMB_RAY_DISTANCE, params)
+
+	return rayHead, rayMid, rayTop
+end
+
+-- Iniciar a escalada
+local function startClimb()
+	if climbing then return end
+	climbing = true
+
+	
+	climbVel = Instance.new("BodyVelocity")
+	climbVel.MaxForce = Vector3.new(1e5, 1e5, 1e5)
+	climbVel.Velocity = Vector3.zero
+	climbVel.Parent = hrp
+
+	climbGyro = Instance.new("BodyGyro")
+	climbGyro.MaxTorque = Vector3.new(1e5, 1e5, 1e5)
+	climbGyro.D = 10
+	climbGyro.P = 3000
+	climbGyro.Parent = hrp
+
+	
+	climbIdleTrack = humanoid:LoadAnimation(climbAnimIdle)
+	climbIdleTrack.Looped = true
+	climbIdleTrack:Play()
+
+	climbAnimTrack = humanoid:LoadAnimation(climbAnim)
+	climbAnimTrack.Looped = true
+end
+
+-- Parar a escalada
+local function stopClimb()
+	if not climbing then return end
+	climbing = false
+
+	if climbVel then climbVel:Destroy() climbVel = nil end
+	if climbGyro then climbGyro:Destroy() climbGyro = nil end
+
+	if climbAnimTrack then climbAnimTrack:Stop() climbAnimTrack = nil end
+	if climbIdleTrack then climbIdleTrack:Stop() climbIdleTrack = nil end
+
+	humanoid:ChangeState(Enum.HumanoidStateType.Freefall)
+end
+
+-- Atualização constante
+RunService.RenderStepped:Connect(function()
+	if not climbing then return end
+
+	local rayHead, rayMid, rayTop = getClimbRays()
+	if not (rayHead and rayMid and rayTop) then
+		stopClimb()
+		return
+	end
+
+	
+	local hitPos = rayMid and rayMid.Position or hrp.Position + hrp.CFrame.LookVector
+	climbGyro.CFrame = CFrame.lookAt(hrp.Position, hitPos)
+
+	
+	local moveDir = Vector3.zero
+	local climbingUp = false
+	local climbingDown = false
+	local movingSide = false
+
+	if UserInputService:IsKeyDown(Enum.KeyCode.W) then
+		moveDir = Vector3.new(0, 1, 0)
+		climbingUp = true
+	elseif UserInputService:IsKeyDown(Enum.KeyCode.S) then
+		moveDir = Vector3.new(0, -1, 0)
+		climbingDown = true
+	elseif UserInputService:IsKeyDown(Enum.KeyCode.A) then
+		moveDir = -hrp.CFrame.RightVector
+		movingSide = true
+	elseif UserInputService:IsKeyDown(Enum.KeyCode.D) then
+		moveDir = hrp.CFrame.RightVector
+		movingSide = true
+	end
+
+	climbVel.Velocity = moveDir * CLIMB_SPEED
+
+	
+	if moveDir.Magnitude == 0 then
+		if climbAnimTrack and climbAnimTrack.IsPlaying then
+			climbAnimTrack:Stop()
+		end
+		if climbIdleTrack and not climbIdleTrack.IsPlaying then
+			climbIdleTrack:Play()
+		end
+	else
+		if climbIdleTrack and climbIdleTrack.IsPlaying then
+			climbIdleTrack:Stop()
+		end
+		if climbAnimTrack and not climbAnimTrack.IsPlaying then
+			climbAnimTrack:Play()
+		end
+	end
+
+	
+	if climbAnimTrack and climbAnimTrack.IsPlaying then
+		if climbingUp then
+			climbAnimTrack:AdjustSpeed(1)
+		elseif climbingDown then
+			climbAnimTrack:AdjustSpeed(-1)
+		else
+			climbAnimTrack:AdjustSpeed(0)
+		end
+	end
+
+	
+	if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+		stopClimb()
+	end
+end)
+
+-- Detecta tentativa de escalada
+UserInputService.InputBegan:Connect(function(input, gp)
+	if gp then return end
+	if input.KeyCode == Enum.KeyCode.W then
+		local rayHead, rayMid, rayTop = getClimbRays()
+		if rayHead and rayMid and rayTop then
+			startClimb()
+		end
+	end
+end)
+
+
+--==============================
+-- SISTEMA DE 'DOUBLE' JUMP
+--==============================
+
+local MAX_AIR_JUMPS = 7 -- Quantidade de pulos >>extras<< no ar 
+local airJumps = 0	-- Quantidade de pulos no ar já dados
+local lastJump = 0	-- Tempo do último pulo
+local JUMP_COOLDOWN = 0.2 -- tempo mínimo entre pulos pra evitar spam
+
+
+-- Detecta quando o player toca o chão
+humanoid.StateChanged:Connect(function(_, newState)
+	if newState == Enum.HumanoidStateType.Landed then
+		airJumps = 0
+	end
+end)
+
+
+-- Detecta e executa pulo
+UserInputService.InputBegan:Connect(function(input, gp)
+	if gp then return end
+	if input.KeyCode == Enum.KeyCode.Space then
+		local now = tick()
+		if now - lastJump < JUMP_COOLDOWN then return end
+		lastJump = now
+
+		local state = humanoid:GetState()
+		if state == Enum.HumanoidStateType.Freefall or state == Enum.HumanoidStateType.Jumping then
+			if airJumps < MAX_AIR_JUMPS then
+				airJumps += 1
+				humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+			end
+		end
+	end
+end)
+
+--==============================
+-- DASH SYSTEM 
+--==============================
+
+local DASH_SPEED = 75	-- Velocidade do dash
+local DASH_DURATION = 0.35	-- Duração do dash
+local DASH_COOLDOWN = 0.2	-- Cooldown entre dashes
+local canDash = true	-- Se é possivel dar o dash
+local S_on = false	-- S pressionado
+local dashActive = false	--Detectar se o dash está ativo
+local BV, BG	-- BodyVelocity e BodyGyro para o dash
+local dashDir -- direção inicial do dash
+
+local dashAnims = {
+	Front = script:FindFirstChild("DashFront"),
+	Left = script:FindFirstChild("DashLeft"),
+	Right = script:FindFirstChild("DashRight"),
+	Back = script:FindFirstChild("DashBack"),
+}
+
+-- Função que impede o dash de atravessar parede
+local function getDashVelocity(direction)
+	local params = RaycastParams.new()
+	params.FilterDescendantsInstances = {character}
+	params.FilterType = Enum.RaycastFilterType.Exclude
+
+	local ray = workspace:Raycast(hrp.Position, direction * 10, params)
+	local speed = DASH_SPEED
+
+	if ray then
+		local dist = (ray.Position - hrp.Position).Magnitude
+		if dist < 3 then
+			speed = math.max(dist * 10, 0)
+		end
+	end
+
+	return Vector3.new(direction.X, 0, direction.Z).Unit * speed
+end
+
+-- Parar o dash
+local function stopDash()
+	dashActive = false
+	if BV then BV:Destroy() BV = nil end
+	if BG then BG:Destroy() BG = nil end
+end
+
+-- Executar o dash
+local function performDash()
+	if not canDash or dashActive then return end
+	canDash = false
+	dashActive = true
+
+	local anim
+	local shiftlock = (UserInputService.MouseBehavior == Enum.MouseBehavior.LockCenter)
+
+	
+	if shiftlock then
+		if S_on then
+			dashDir = Vector3.new(hrp.CFrame.LookVector.X, 0, hrp.CFrame.LookVector.Z).Unit
+			anim = dashAnims.Back
+		elseif A_on then
+			dashDir = Vector3.new(hrp.CFrame.RightVector.X, 0, hrp.CFrame.RightVector.Z).Unit
+			anim = dashAnims.Left
+		elseif D_on then
+			dashDir = -Vector3.new(hrp.CFrame.RightVector.X, 0, hrp.CFrame.RightVector.Z).Unit
+			anim = dashAnims.Right
+		else
+			dashDir = -Vector3.new(hrp.CFrame.LookVector.X, 0, hrp.CFrame.LookVector.Z).Unit
+			anim = dashAnims.Front
+		end
+	else
+		dashDir = -Vector3.new(hrp.CFrame.LookVector.X, 0, hrp.CFrame.LookVector.Z).Unit
+		anim = dashAnims.Front
+	end
+
+	
+	BV = Instance.new("BodyVelocity")
+	BV.MaxForce = Vector3.new(1e8, 1e8, 1e8)
+	BV.Velocity = getDashVelocity(dashDir)
+	BV.Parent = hrp
+
+	BG = Instance.new("BodyGyro")
+	BG.MaxTorque = Vector3.new(1e8, 1e8, 1e8)
+	BG.P = 3e4
+	BG.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + dashDir)
+	BG.Parent = hrp
+
+	
+	if anim then
+		local track = humanoid:FindFirstChildOfClass("Animator"):LoadAnimation(anim)
+		track:Play()
+	end
+
+	
+	local initialCFrame = hrp.CFrame
+	local dashStart = tick()
+
+	local conn
+	conn = RunService.RenderStepped:Connect(function()
+		if not dashActive or not BV or not BG then
+			if conn then conn:Disconnect() end
+			return
+		end
+
+		local elapsed = tick() - dashStart
+		if elapsed > DASH_DURATION then
+			stopDash()
+			if conn then conn:Disconnect() end
+			return
+		end
+
+		
+		local relativeDir = initialCFrame:ToObjectSpace(CFrame.lookAt(initialCFrame.Position + dashDir, initialCFrame.Position)).LookVector
+		local newWorldDir = (hrp.CFrame:ToWorldSpace(CFrame.new(relativeDir))).Position - hrp.Position
+		newWorldDir = Vector3.new(newWorldDir.X, 0, newWorldDir.Z).Unit
+
+		BV.Velocity = getDashVelocity(newWorldDir)
+		BG.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + newWorldDir)
+	end)
+
+	task.delay(DASH_DURATION, stopDash)
+	task.delay(DASH_COOLDOWN, function()
+		canDash = true
+	end)
+end
+
+-- Inicio de inputs / Iniciar dash's e mudar direções
+UserInputService.InputBegan:Connect(function(input, gp)
+	if gp then return end
+
+	if input.KeyCode == Enum.KeyCode.Q then
+		performDash()
+	elseif input.KeyCode == Enum.KeyCode.A then
+		A_on = true
+	elseif input.KeyCode == Enum.KeyCode.D then
+		D_on = true
+	elseif input.KeyCode == Enum.KeyCode.S then
+		S_on = true
+	end
+end)
+
+-- Final dos inputs
+UserInputService.InputEnded:Connect(function(input, gp)
+	if gp then return end
+	if input.KeyCode == Enum.KeyCode.A then
+		A_on = false
+	elseif input.KeyCode == Enum.KeyCode.D then
+		D_on = false
+	elseif input.KeyCode == Enum.KeyCode.S then
+		S_on = false
+	end
+end)
+
+--==============================
+-- SLIDE SYSTEM
+--==============================
+
+local SlideSettings = {
+	Cooldown = 0.15,
+	BaseSpeed = 65,
+	MaxMultiplier = 2,
+	SpeedChangeRate = {
+		Forward = 1,
+		Upward = 2,
+		Downward = 1,
+	},
+	PushOnCancel = true,
+	PushVelocity = { Forward = 50, Up = 50 },
+	RaycastDownDistance = 10,
+}
+
+local isSliding = false
+local canSlide = true
+local currentMult = 1
+local slideBV, alignGyro, posConn
+local SlideAnim = humanoid:LoadAnimation(script:WaitForChild("SlideAnim"))
+local params = RaycastParams.new()
+params.FilterDescendantsInstances = { character }
+params.FilterType = Enum.RaycastFilterType.Exclude
+
+local ORIGINAL_HIP = humanoid.HipHeight
+local function getSlideHipHeight()
+	return math.max(ORIGINAL_HIP - 1.2, 0.5)
+end
+
+
+-- Finalizar slide
+local function stopSlide()
+	if not isSliding then return end
+	isSliding = false
+
+	if posConn then posConn:Disconnect() posConn = nil end
+	if slideBV then slideBV:Destroy() slideBV = nil end
+	if alignGyro then alignGyro:Destroy() alignGyro = nil end
+
+	humanoid.AutoRotate = true
+	humanoid.HipHeight = ORIGINAL_HIP
+	SlideAnim:Stop(0.15)
+	character:SetAttribute("IsSliding", false)
+
+	task.delay(SlideSettings.Cooldown, function()
+		canSlide = true
+	end)
+end
+
+-- Iniciar slide
+local function performSlide()
+	if isSliding or not canSlide then return end
+
+	local groundRay = workspace:Raycast(hrp.Position, -hrp.CFrame.UpVector * SlideSettings.RaycastDownDistance, params)
+	if not groundRay then return end
+
+	local normal = groundRay.Normal
+	local slopeAngle = math.deg(math.acos(normal:Dot(Vector3.new(0,1,0))))
+	if slopeAngle < 5 then return end 
+
+	isSliding = true
+	canSlide = false
+	currentMult = 1
+	character:SetAttribute("IsSliding", true)
+
+	humanoid.AutoRotate = false
+	humanoid.HipHeight = getSlideHipHeight()
+	SlideAnim:Play(0.15)
+
+	slideBV = Instance.new("BodyVelocity")
+	slideBV.MaxForce = Vector3.new(1e6, 0, 1e6)
+	slideBV.Velocity = hrp.CFrame.LookVector * SlideSettings.BaseSpeed
+	slideBV.Parent = hrp
+
+	alignGyro = Instance.new("BodyGyro")
+	alignGyro.MaxTorque = Vector3.new(0, 5e5, 0)
+	alignGyro.P = 10000
+	alignGyro.Parent = hrp
+
+	local prevY = hrp.Position.Y
+
+	posConn = RunService.Heartbeat:Connect(function(dt)
+		local ground = workspace:Raycast(hrp.Position, -Vector3.yAxis * SlideSettings.RaycastDownDistance, params)
+
+		
+		local look = hrp.CFrame.LookVector
+		local flatLook = Vector3.new(look.X, 0, look.Z)
+		if flatLook.Magnitude < 1e-3 then
+			flatLook = hrp.CFrame.ZVector * Vector3.new(1, 0, 1)
+		end
+		flatLook = flatLook.Unit
+		alignGyro.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + flatLook, Vector3.yAxis)
+
+		
+		local forwardCheck = workspace:Raycast(hrp.Position, flatLook * 3, params)
+		if forwardCheck then
+			local dist = (forwardCheck.Position - hrp.Position).Magnitude
+			if dist < 1 then
+				stopSlide()
+				return
+			else
+				currentMult = math.clamp(currentMult * (dist / 3), 0, SlideSettings.MaxMultiplier)
+			end
+		end
+
+		
+		slideBV.Velocity = flatLook * (SlideSettings.BaseSpeed * currentMult)
+		local currY = hrp.Position.Y
+		local dY = (currY - prevY)
+		prevY = currY
+
+		if dY < 0.1 and dY > -0.1 then
+			currentMult = math.clamp(currentMult - SlideSettings.SpeedChangeRate.Forward * dt, 0, SlideSettings.MaxMultiplier)
+		elseif dY > 0 then
+			currentMult = math.clamp(currentMult - SlideSettings.SpeedChangeRate.Upward * dt, 0, SlideSettings.MaxMultiplier)
+		else
+			currentMult = math.clamp(currentMult + SlideSettings.SpeedChangeRate.Downward * dt, 0, SlideSettings.MaxMultiplier)
+		end
+
+		if currentMult < 0.1 or not ground or humanoid.MoveDirection.Magnitude < 1e-3 then
+			stopSlide()
+		end
+	end)
+end
+
+-- Cancelar com espaço (impulso)
+UserInputService.InputBegan:Connect(function(input, gp)
+	if gp then return end
+
+	if input.KeyCode == Enum.KeyCode.E then
+		performSlide()
+	elseif input.KeyCode == Enum.KeyCode.Space and isSliding then
+		local cancelMult = currentMult
+		stopSlide()
+
+		if SlideSettings.PushOnCancel then
+			local push = Instance.new("BodyVelocity")
+			push.MaxForce = Vector3.new(1e6, 1e6, 1e6)
+			push.Velocity = (hrp.CFrame.LookVector * (SlideSettings.PushVelocity.Forward * cancelMult))
+				+ (Vector3.yAxis * SlideSettings.PushVelocity.Up)
+			push.Parent = hrp
+			game:GetService("Debris"):AddItem(push, 0.1)
+		end
+	end
+end)
+
+humanoid.Died:Connect(function()
+	if isSliding then stopSlide() end
+end)
